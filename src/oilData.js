@@ -98,8 +98,8 @@ async function getOilData(ticker, days = 5, interval = '1d') {
 
     const formattedQuotes = quotes.map(data => {
       const d = data.date;
-      // If interval is 1 day or more, use only date/day labels
-      if (intervalMinutes >= 1440) {
+      // If the chart range is more than 1 day, show only date/day labels to avoid clutter
+      if (days > 1 || intervalMinutes >= 1440) {
         return { date: `${shortDays[d.getDay()]} ${d.getMonth()+1}/${d.getDate()}`, close: data.close };
       } else {
         const time = d.toISOString().split('T')[1].substring(0, 5);
