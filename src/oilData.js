@@ -1,8 +1,8 @@
 const YahooFinance = require('yahoo-finance2').default;
-const yahooFinance = new YahooFinance({ suppressNotices: ['yahooSurvey'] });
 
-// Apply a standard browser User-Agent to bypass Yahoo Finance's 429 / WAF blocks on Data Center IPs like Render.com
-yahooFinance.setGlobalConfig({
+// Apply a standard browser User-Agent via v3 constructor to bypass Yahoo Finance's 429 WAF blocks on Data Center IPs
+const yahooFinance = new YahooFinance({
+  suppressNotices: ['yahooSurvey'],
   fetchOptions: {
     headers: {
       "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
