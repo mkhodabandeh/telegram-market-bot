@@ -25,18 +25,25 @@ const yahooFinance = new YahooFinance({
 
 async function getOilData(ticker, days = 5, interval = '1d') {
   try {
-    // Get current price
-    const quote = await yahooFinance.quote(ticker);
-    const currentPrice = quote.regularMarketPrice;
-    const changePercent = quote.regularMarketChangePercent;
-    const name = quote.shortName || quote.longName || ticker;
-
     // Get historical data bounds based on days argument
     const queryOptions = { 
       period1: new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString().split('T')[0], 
       interval: interval 
     };
+    
+    // We use chart() instead of quote() because quote() requires Set-Cookie/crumb headers
+    // which are often stripped by proxies like Cloudflare Workers. chart() returns all needed info in meta.
     const chartData = await yahooFinance.chart(ticker, queryOptions);
+    
+    const meta = chartData.meta;
+    const currentPrice = meta.regularMarketPrice;
+    
+    let changePercent = null;
+    if (meta.chartPreviousClose) {
+      changePercent = ((currentPrice - meta.chartPreviousClose) / meta.chartPreviousClose) * 100;
+    }
+    
+    const name = meta.shortName || meta.longName || meta.symbol || ticker;
     
     // Filter out null closes
     let quotes = chartData.quotes.filter(q => q.close !== null);
