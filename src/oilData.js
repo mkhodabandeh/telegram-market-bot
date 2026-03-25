@@ -96,11 +96,19 @@ async function getOilData(ticker, days = 5, interval = '1d') {
     const daysOfWeek = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
     const shortDays = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
+    let lastDayLabel = '';
     const formattedQuotes = quotes.map(data => {
       const d = data.date;
       // If the chart range is more than 1 day, show only date/day labels to avoid clutter
       if (days > 1 || intervalMinutes >= 1440) {
-        return { date: `${shortDays[d.getDay()]} ${d.getMonth()+1}/${d.getDate()}`, close: data.close };
+        const dayLabel = `${shortDays[d.getDay()]} ${d.getMonth()+1}/${d.getDate()}`;
+        // Only return the label if it's different from the previous one, to avoid repeating daily labels
+        if (dayLabel !== lastDayLabel) {
+          lastDayLabel = dayLabel;
+          return { date: dayLabel, close: data.close };
+        } else {
+          return { date: '', close: data.close };
+        }
       } else {
         const time = d.toISOString().split('T')[1].substring(0, 5);
         return { date: `${shortDays[d.getDay()]} ${time}`, close: data.close };
