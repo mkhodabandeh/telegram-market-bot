@@ -1,5 +1,6 @@
 node_modules/
 .env
+.env.test
 settings.json
 subscriptions.json
 .DS_Store
