@@ -1,7 +1,20 @@
 const YahooFinance = require('yahoo-finance2').default;
 
-// Apply a standard browser User-Agent via v3 constructor to bypass Yahoo Finance's 429 WAF blocks on Data Center IPs
+const originalFetch = global.fetch || require('node-fetch');
+
+async function customFetch(url, options) {
+  const proxyUrlStr = process.env.PROXY_URL;
+  if (proxyUrlStr) {
+    const proxyUrl = proxyUrlStr + encodeURIComponent(url);
+    return originalFetch(proxyUrl, options);
+  } else {
+    return originalFetch(url, options);
+  }
+}
+
+// Apply proxy custom fetch to bypass Yahoo Finance's 429 WAF blocks on Data Center IPs
 const yahooFinance = new YahooFinance({
+  fetch: customFetch,
   suppressNotices: ['yahooSurvey'],
   fetchOptions: {
     headers: {
