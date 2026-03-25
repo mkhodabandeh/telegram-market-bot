@@ -55,7 +55,7 @@ Use descriptive commit message prefixes (not mandatory but keeps history clean):
 
 ---
 
-## Releasing to Production
+## Releasing to Production (Humans Only)
 
 Only when locally tested and ready:
 
@@ -98,7 +98,7 @@ When working on this project as an AI agent:
 
 1. **Develop using `npm run dev`** — never use `npm run start` for local testing
 2. **Commit freely** — `git push` to `main` is safe and does not deploy production
-3. **Never manually `git push --tags`** — use `npm run release` only
-4. **Determine release type** from the nature of changes: `patch` for fixes, `minor` for features, `major` for breaking changes
-5. **Do not modify `.env` or `.env.test`** — ask the user to update secrets manually
-6. **Render deploy = git tag** — only `npm run release` creates a tag and triggers production deploy
+3. **NEVER run `npm run release`** — this command is restricted to the human USER only. 
+4. **Determine release type** from the nature of changes: `patch` for fixes, `minor` for features, `major` for breaking changes. Communicate this to the user.
+5. **Do not modify `.env` or `.env.test`** — ask the user to update secrets manually.
+6. **Ask the user to deploy** — once work is verified, ask the user to run the appropriate `npm run release` command.
