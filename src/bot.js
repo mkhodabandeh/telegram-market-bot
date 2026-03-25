@@ -173,12 +173,24 @@ bot.onText(/\/tickers? ?(.*)?/, (msg, match) => {
   bot.sendMessage(chatId, `✅ Tickers updated to: **${args.join(', ')}**\nSend /markets to test.`, { parse_mode: 'Markdown' });
 });
 
-// Hourly cron job (runs at minute 0 of every hour)
 cron.schedule('0 * * * *', async () => {
-  console.log('Running hourly oil price broadcast...');
+  console.log('Running hourly market broadcast...');
   for (const chatId of subscriptions) {
     await sendOilUpdate(chatId);
   }
+});
+
+// Create a dummy web server so Render.com can bind a port for its "Web Service" Free Tier constraints
+const express = require('express');
+const app = express();
+const port = process.env.PORT || 3000;
+
+app.get('/', (req, res) => {
+  res.send('Telegram Market Bot is running! 📈');
+});
+
+app.listen(port, () => {
+  console.log(`Dummy Express web server listening on port ${port}`);
 });
 
 console.log("Bot is running...");
