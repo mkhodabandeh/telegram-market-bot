@@ -5,6 +5,7 @@ const fs = require('fs');
 const { getOilData } = require('./oilData');
 const { generateChartUrl } = require('./chart');
 const { stitchChartsInGrid } = require('./subplots');
+const packageJson = require('../package.json');
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
 if (!token) {
@@ -155,8 +156,13 @@ async function sendOilUpdate(chatId) {
 // Commands
 bot.onText(/\/(start|help)/, (msg) => {
   const chatId = msg.chat.id;
-  const welcomeMsg = `Welcome to the Market Price Bot! 📈\n\nCommands:\n/markets - Get current prices and charts\n/subscribe - Get an automatic update every hour\n/unsubscribe - Stop automatic hourly updates\n/set [days] [interval] - Customize the chart (e.g. \`/set 3 30m\` or \`/set 30 1d\`)\n/tickers [T1] [T2] - Set your preferred tickers (e.g. \`/tickers BZ=F CL=F NG=F\`)`;
+  const welcomeMsg = `Welcome to the Market Price Bot! 📈\n\nCommands:\n/markets - Get current prices and charts\n/subscribe - Get an automatic update every hour\n/unsubscribe - Stop automatic hourly updates\n/set [days] [interval] - Customize the chart (e.g. \`/set 3 30m\` or \`/set 30 1d\`)\n/tickers [T1] [T2] - Set your preferred tickers (e.g. \`/tickers BZ=F CL=F GC=F\`)\n/version - Show the current bot version`;
   bot.sendMessage(chatId, welcomeMsg, { parse_mode: 'Markdown' });
+});
+
+bot.onText(/\/version/, (msg) => {
+  const chatId = msg.chat.id;
+  bot.sendMessage(chatId, `🤖 *Market Bot Version:* ${packageJson.version}`, { parse_mode: 'Markdown' });
 });
 
 bot.onText(/\/markets/, (msg) => {
@@ -254,6 +260,20 @@ app.get('/', (req, res) => {
 
 app.listen(port, () => {
   console.log(`Dummy Express web server listening on port ${port}`);
+});
+
+bot.setMyCommands([
+  { command: 'markets', description: 'Get current prices and charts' },
+  { command: 'subscribe', description: 'Subscribe to automatic updates' },
+  { command: 'unsubscribe', description: 'Unsubscribe from updates' },
+  { command: 'set', description: 'Customize chart range and interval' },
+  { command: 'tickers', description: 'Set preferred market tickers' },
+  { command: 'version', description: 'Show bot version' },
+  { command: 'help', description: 'Show help message' }
+]).then(() => {
+  console.log("Bot commands registered.");
+}).catch((err) => {
+  console.error("Error registering bot commands:", err);
 });
 
 console.log("Bot is running...");
