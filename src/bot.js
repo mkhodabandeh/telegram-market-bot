@@ -17,13 +17,45 @@ const bot = new TelegramBot(token, { polling: true });
 // Simple file-based subscription management
 const SUBSCRIPTIONS_FILE = './subscriptions.json';
 const SETTINGS_FILE = './settings.json';
-let subscriptions = new Set();
+// subscriptions: Map<chatId, { interval: string, cronJob: CronJob }>
+let subscriptions = new Map();
 let userSettings = {};
+
+/**
+ * Parse an interval string like "4h", "30m", "2d" into a cron expression.
+ * Supported units: m (minutes), h (hours), d (days).
+ * Returns null if the interval is invalid or too short (< 1 min).
+ */
+function intervalToCron(intervalStr) {
+  const match = intervalStr.match(/^(\d+)([mhd])$/);
+  if (!match) return null;
+  const value = parseInt(match[1], 10);
+  const unit = match[2];
+  if (value <= 0) return null;
+
+  if (unit === 'm') {
+    if (value < 1 || value > 59) return null;
+    return `*/${value} * * * *`;
+  } else if (unit === 'h') {
+    if (value < 1 || value > 23) return null;
+    return `0 */${value} * * *`;
+  } else if (unit === 'd') {
+    if (value < 1 || value > 30) return null;
+    return `0 0 */${value} * *`;
+  }
+  return null;
+}
 
 if (fs.existsSync(SUBSCRIPTIONS_FILE)) {
   try {
-    const data = fs.readFileSync(SUBSCRIPTIONS_FILE, 'utf8');
-    subscriptions = new Set(JSON.parse(data));
+    const data = JSON.parse(fs.readFileSync(SUBSCRIPTIONS_FILE, 'utf8'));
+    // data may be an array (legacy) or an object { chatId: interval }
+    if (Array.isArray(data)) {
+      // legacy: set with no interval → default 1h
+      data.forEach(chatId => scheduleSubscription(chatId, '1h'));
+    } else {
+      Object.entries(data).forEach(([chatId, interval]) => scheduleSubscription(Number(chatId), interval));
+    }
   } catch (err) {
     console.error("Error reading subscriptions file:", err);
   }
@@ -39,7 +71,26 @@ if (fs.existsSync(SETTINGS_FILE)) {
 }
 
 function saveSubscriptions() {
-  fs.writeFileSync(SUBSCRIPTIONS_FILE, JSON.stringify(Array.from(subscriptions)));
+  const data = {};
+  for (const [chatId, { interval }] of subscriptions) {
+    data[chatId] = interval;
+  }
+  fs.writeFileSync(SUBSCRIPTIONS_FILE, JSON.stringify(data));
+}
+
+function scheduleSubscription(chatId, interval) {
+  // Cancel any existing job for this chat
+  if (subscriptions.has(chatId)) {
+    subscriptions.get(chatId).cronJob.stop();
+  }
+  const cronExpr = intervalToCron(interval);
+  if (!cronExpr) return false;
+  const job = cron.schedule(cronExpr, async () => {
+    console.log(`Sending update to ${chatId} (interval: ${interval})`);
+    await sendOilUpdate(chatId);
+  });
+  subscriptions.set(chatId, { interval, cronJob: job });
+  return true;
 }
 
 function saveSettings() {
@@ -113,18 +164,35 @@ bot.onText(/\/markets/, (msg) => {
   sendOilUpdate(chatId);
 });
 
-bot.onText(/\/subscribe/, (msg) => {
+bot.onText(/\/subscribe(?:\s+(.+))?/, (msg, match) => {
   const chatId = msg.chat.id;
-  subscriptions.add(chatId);
+  const intervalArg = (match[1] || '1h').trim();
+
+  if (!intervalToCron(intervalArg)) {
+    bot.sendMessage(chatId,
+      "⚠️ Invalid interval. Use formats like `30m`, `4h`, `2d`.\nExample: `/subscribe 4h`",
+      { parse_mode: 'Markdown' }
+    );
+    return;
+  }
+
+  const ok = scheduleSubscription(chatId, intervalArg);
+  if (!ok) {
+    bot.sendMessage(chatId, "⚠️ Failed to schedule subscription.");
+    return;
+  }
   saveSubscriptions();
-  bot.sendMessage(chatId, "✅ You are now subscribed to hourly oil price updates!");
+  bot.sendMessage(chatId, `✅ Subscribed! You will receive market updates every *${intervalArg}*.`, { parse_mode: 'Markdown' });
 });
 
 bot.onText(/\/unsubscribe/, (msg) => {
   const chatId = msg.chat.id;
-  subscriptions.delete(chatId);
-  saveSubscriptions();
-  bot.sendMessage(chatId, "❌ You have been unsubscribed from hourly updates.");
+  if (subscriptions.has(chatId)) {
+    subscriptions.get(chatId).cronJob.stop();
+    subscriptions.delete(chatId);
+    saveSubscriptions();
+  }
+  bot.sendMessage(chatId, "❌ You have been unsubscribed from market updates.");
 });
 
 bot.onText(/\/set ?(.*)?/, (msg, match) => {
@@ -173,12 +241,7 @@ bot.onText(/\/tickers? ?(.*)?/, (msg, match) => {
   bot.sendMessage(chatId, `✅ Tickers updated to: **${args.join(', ')}**\nSend /markets to test.`, { parse_mode: 'Markdown' });
 });
 
-cron.schedule('0 * * * *', async () => {
-  console.log('Running hourly market broadcast...');
-  for (const chatId of subscriptions) {
-    await sendOilUpdate(chatId);
-  }
-});
+// Per-chat cron jobs are created in scheduleSubscription() — no global broadcast needed.
 
 // Create a dummy web server so Render.com can bind a port for its "Web Service" Free Tier constraints
 const express = require('express');
