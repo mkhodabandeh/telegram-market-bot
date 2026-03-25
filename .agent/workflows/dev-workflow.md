@@ -5,63 +5,100 @@ description: local development, testing, and release workflow for the market bot
 # Development & Release Workflow
 
 > [!IMPORTANT]
-> Always develop and test locally using the **test bot** before pushing to `main`.
-> Never push directly to `main` without validating locally first.
+> **Chosen strategy: GitHub Actions CI (syntax check) + Tag-based Render deploys.**
+> Commit and push to `main` freely at any time. Only `npm run release` triggers a production deploy.
 
-## 1. Local Development
+---
 
-Run the bot locally using the **test Telegram bot token** (stored in `.env.test`):
+## The Full Picture
 
-```bash
-npm run dev
+```
+[local dev]  →  npm run dev     → test with test bot (.env.test)
+[commit]     →  git push        → GitHub Actions runs syntax check ✅
+[release]    →  npm run release → bumps version, creates git tag → Render deploys
 ```
 
-- Uses `.env.test` instead of `.env`
-- `.env.test` contains `TELEGRAM_BOT_TOKEN=<test_bot_token>` and optionally `PROXY_URL`
-- `.env.test` is gitignored — never commit it
+**Render is configured to deploy on git tags only** — not on every push.
+This means you can push work-in-progress to `main` all day without affecting production.
 
-Make and test all changes against the test bot before proceeding.
+---
 
-## 2. Versioning Rules
-
-Use semantic versioning (`MAJOR.MINOR.PATCH`):
-
-| Type | When to use | Command |
-|---|---|---|
-| `patch` | Bug fix, minor tweak | `npm run release` |
-| `minor` | New feature, backwards-compatible | `npm run release -- minor` |
-| `major` | Breaking change or major refactor | `npm run release -- major` |
-
-## 3. Releasing to Production
-
-When changes are tested and ready:
+## Daily Development
 
 ```bash
-npm run release           # patch bump (default)
-npm run release -- minor  # minor bump
-npm run release -- major  # major bump
+npm run dev          # runs bot locally with .env.test (test bot token)
 ```
 
-This script will:
-1. Bump the version in `package.json`
-2. Commit: `chore: release vX.Y.Z`
-3. Create a git tag `vX.Y.Z`
-4. Push commit + tag to `main`
+- Uses `.env.test` (gitignored — never commit it)
+- Does NOT affect the production bot at all
+- Test all features against your test Telegram bot first
 
-Render.com will automatically redeploy from `main`.
+---
 
-## 4. Files
+## Committing Work
+
+```bash
+git add .
+git commit -m "feat: describe what you did"
+git push                  # safe — does NOT deploy to production
+```
+
+GitHub Actions will run a syntax check on every push. If it fails, fix it before releasing.
+
+Use descriptive commit message prefixes (not mandatory but keeps history clean):
+| Prefix | Meaning |
+|---|---|
+| `feat:` | New feature |
+| `fix:` | Bug fix |
+| `chore:` | Tooling, config, housekeeping |
+| `refactor:` | Code restructure, no behavior change |
+
+---
+
+## Releasing to Production
+
+Only when locally tested and ready:
+
+```bash
+npm run release           # bug fix   → patch bump (x.y.Z)
+npm run release -- minor  # new feature → minor bump (x.Y.0)
+npm run release -- major  # breaking change → major bump (X.0.0)
+```
+
+This script:
+1. Bumps `version` in `package.json`
+2. Commits: `chore: release vX.Y.Z`
+3. Creates git tag `vX.Y.Z`
+4. Pushes commit + tag to `main`
+5. **Render detects the new tag and deploys** 🚀
+
+### Versioning rules
+| Change type | Bump |
+|---|---|
+| Fixing a bug | `patch` (default) |
+| Adding a new command or feature | `minor` |
+| Breaking existing behavior / major refactor | `major` |
+
+---
+
+## Files Reference
 
 | File | Purpose |
 |---|---|
-| `.env` | Production secrets (gitignored) |
-| `.env.test` | Test bot secrets (gitignored) |
-| `scripts/release.js` | Version bump + push automation |
+| `.env` | Production secrets — never commit, never touch |
+| `.env.test` | Test bot secrets — gitignored, never commit |
+| `scripts/release.js` | Version bump + tag + push automation |
+| `.github/workflows/ci.yml` | Syntax check on every push to main |
 
-## 5. Agent Instructions
+---
 
-When working on this project:
-- **Always suggest** `npm run dev` to test changes locally first
-- **Never** `git push` directly — always use `npm run release [patch|minor|major]`
-- **Determine bump type** from the nature of the change (see table above)
-- **Do not** modify `.env` or `.env.test` — ask the user to update secrets manually
+## Agent Instructions
+
+When working on this project as an AI agent:
+
+1. **Develop using `npm run dev`** — never use `npm run start` for local testing
+2. **Commit freely** — `git push` to `main` is safe and does not deploy production
+3. **Never manually `git push --tags`** — use `npm run release` only
+4. **Determine release type** from the nature of changes: `patch` for fixes, `minor` for features, `major` for breaking changes
+5. **Do not modify `.env` or `.env.test`** — ask the user to update secrets manually
+6. **Render deploy = git tag** — only `npm run release` creates a tag and triggers production deploy
