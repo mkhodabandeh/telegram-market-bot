@@ -25,10 +25,35 @@ const yahooFinance = new YahooFinance({
 
 async function getOilData(ticker, days = 5, interval = '1d') {
   try {
+    let baseInterval = interval;
+    let downsampleTarget = null;
+    let match = interval.match(/^(\d+)([mhd])$/);
+    if (match) {
+      const num = parseInt(match[1], 10);
+      const unit = match[2];
+      
+      if (unit === 'd') {
+        baseInterval = '1d';
+        if (num > 1) downsampleTarget = num;
+      } else if (unit === 'h') {
+        baseInterval = '1h';
+        if (num > 1) downsampleTarget = num;
+      } else if (unit === 'm') {
+        const validM = [90, 60, 30, 15, 5, 2, 1];
+        for (let m of validM) {
+          if (num % m === 0) {
+            baseInterval = `${m}m`;
+            if (num > m) downsampleTarget = num / m;
+            break;
+          }
+        }
+      }
+    }
+    
     // Get historical data bounds based on days argument
     const queryOptions = { 
       period1: new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString().split('T')[0], 
-      interval: interval 
+      interval: baseInterval 
     };
     
     // We use chart() instead of quote() because quote() requires Set-Cookie/crumb headers
@@ -47,13 +72,23 @@ async function getOilData(ticker, days = 5, interval = '1d') {
     
     // Filter out null closes
     let quotes = chartData.quotes.filter(q => q.close !== null);
+    
+    // Downsample if required to build the target interval
+    if (downsampleTarget && downsampleTarget > 1) {
+      const downsampledQuotes = [];
+      // Step backwards so the most recent data point is always included perfectly at the edge
+      for (let i = quotes.length - 1; i >= 0; i -= downsampleTarget) {
+        downsampledQuotes.unshift(quotes[i]);
+      }
+      quotes = downsampledQuotes;
+    }
 
     const daysOfWeek = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
     const shortDays = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
     const formattedQuotes = quotes.map(data => {
       const d = data.date;
-      if (['1d', '1wk', '1mo'].includes(interval)) {
+      if (interval.endsWith('d') || ['1wk', '1mo'].includes(interval)) {
         return { date: `${daysOfWeek[d.getDay()]} (${d.getMonth()+1}/${d.getDate()})`, close: data.close };
       } else {
         const time = d.toISOString().split('T')[1].substring(0, 5);

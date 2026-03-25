@@ -144,8 +144,8 @@ bot.onText(/\/set ?(.*)?/, (msg, match) => {
     return;
   }
   
-  if (!['1m', '2m', '5m', '15m', '30m', '60m', '90m', '1h', '1d', '5d', '1wk', '1mo', '3mo'].includes(interval)) {
-    bot.sendMessage(chatId, "⚠️ Invalid interval. See `/set` for valid options.", { parse_mode: 'Markdown' });
+  if (!interval.match(/^\d+[mhd]$/) && !['1wk', '1mo', '3mo'].includes(interval)) {
+    bot.sendMessage(chatId, "⚠️ Invalid interval. Use formats like `8h`, `2d`, `30m` or native `1wk`, `1mo`.", { parse_mode: 'Markdown' });
     return;
   }
 
