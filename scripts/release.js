@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /**
- * Release script: bumps package.json version, commits, tags, and pushes to main.
+ * Release script: bumps package.json version, commits, tags, pushes to main,
+ * and triggers a Render deploy via RENDER_DEPLOY_HOOK from .env.
  *
  * Usage:
  *   npm run release           # patch bump (x.y.Z)
@@ -8,6 +9,7 @@
  *   npm run release -- major  # major bump (X.0.0)
  */
 
+require('dotenv').config({ path: require('path').resolve(__dirname, '../.env') });
 const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
@@ -49,8 +51,26 @@ try {
   execSync(`git tag ${tag}`, { stdio: 'inherit' });
   execSync('git push', { stdio: 'inherit' });
   execSync('git push --tags', { stdio: 'inherit' });
-  console.log(`\n🚀 Released ${tag} and pushed to main!`);
+  console.log(`\n🏷  Tag ${tag} pushed to main.`);
 } catch (err) {
   console.error('❌ Git operation failed:', err.message);
   process.exit(1);
+}
+
+// Trigger Render deploy via deploy hook
+const deployHook = process.env.RENDER_DEPLOY_HOOK;
+if (!deployHook) {
+  console.warn('⚠️  RENDER_DEPLOY_HOOK not set in .env — skipping Render deploy trigger.');
+  console.warn('   Add RENDER_DEPLOY_HOOK=<url> to .env to enable auto-deploy on release.');
+} else {
+  console.log('🚀 Triggering Render deploy...');
+  fetch(deployHook, { method: 'GET' })
+    .then(res => {
+      if (res.ok) {
+        console.log(`✅ Render deploy triggered successfully! (${tag})`);
+      } else {
+        console.warn(`⚠️  Render deploy hook returned status ${res.status}`);
+      }
+    })
+    .catch(err => console.error('❌ Failed to call deploy hook:', err.message));
 }
