@@ -28,6 +28,8 @@ async function getOilData(ticker, days = 5, interval = '1d') {
     let baseInterval = interval;
     let downsampleTarget = null;
     let match = interval.match(/^(\d+)([mhd])$/);
+    let intervalMinutes = 0;
+
     if (match) {
       const num = parseInt(match[1], 10);
       const unit = match[2];
@@ -35,9 +37,11 @@ async function getOilData(ticker, days = 5, interval = '1d') {
       if (unit === 'd') {
         baseInterval = '1d';
         if (num > 1) downsampleTarget = num;
+        intervalMinutes = num * 1440;
       } else if (unit === 'h') {
         baseInterval = '1h';
         if (num > 1) downsampleTarget = num;
+        intervalMinutes = num * 60;
       } else if (unit === 'm') {
         const validM = [90, 60, 30, 15, 5, 2, 1];
         for (let m of validM) {
@@ -47,7 +51,13 @@ async function getOilData(ticker, days = 5, interval = '1d') {
             break;
           }
         }
+        intervalMinutes = num;
       }
+    } else {
+      // Handle native Yahoo intervals that don't match the \d+[mhd] pattern
+      if (interval === '1wk') intervalMinutes = 10080;
+      else if (interval === '1mo') intervalMinutes = 43200;
+      else if (interval === '3mo') intervalMinutes = 129600;
     }
     
     // Get historical data bounds based on days argument
@@ -88,8 +98,9 @@ async function getOilData(ticker, days = 5, interval = '1d') {
 
     const formattedQuotes = quotes.map(data => {
       const d = data.date;
-      if (interval.endsWith('d') || ['1wk', '1mo'].includes(interval)) {
-        return { date: `${daysOfWeek[d.getDay()]} (${d.getMonth()+1}/${d.getDate()})`, close: data.close };
+      // If interval is 1 day or more, use only date/day labels
+      if (intervalMinutes >= 1440) {
+        return { date: `${shortDays[d.getDay()]} ${d.getMonth()+1}/${d.getDate()}`, close: data.close };
       } else {
         const time = d.toISOString().split('T')[1].substring(0, 5);
         return { date: `${shortDays[d.getDay()]} ${time}`, close: data.close };
