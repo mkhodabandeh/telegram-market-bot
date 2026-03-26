@@ -258,6 +258,10 @@ app.get('/', (req, res) => {
   res.send('Telegram Market Bot is running! 📈');
 });
 
+app.get('/ping', (req, res) => {
+  res.status(200).send('OK');
+});
+
 app.listen(port, () => {
   console.log(`Dummy Express web server listening on port ${port}`);
 });
