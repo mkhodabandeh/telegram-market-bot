@@ -1,6 +1,7 @@
 require('dotenv').config();
 const TelegramBot = require('node-telegram-bot-api');
 const cron = require('node-cron');
+const express = require('express');
 const fs = require('fs');
 const { getOilData } = require('./oilData');
 const { generateChartUrl } = require('./chart');
@@ -12,6 +13,29 @@ if (!token) {
   console.error("TELEGRAM_BOT_TOKEN is not set in .env");
   process.exit(1);
 }
+
+// Start the web server immediately so Render health checks and external pings
+// succeed even while the Telegram bot finishes initializing on cold starts.
+const app = express();
+const port = process.env.PORT || 3000;
+
+app.get('/', (req, res) => {
+  res.type('text/plain').send('Telegram Market Bot is running');
+});
+
+app.get('/ping', (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.status(204).end();
+});
+
+app.head('/ping', (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.status(204).end();
+});
+
+app.listen(port, () => {
+  console.log(`Express web server listening on port ${port}`);
+});
 
 const bot = new TelegramBot(token, { polling: true });
 
@@ -248,23 +272,6 @@ bot.onText(/\/tickers? ?(.*)?/, (msg, match) => {
 });
 
 // Per-chat cron jobs are created in scheduleSubscription() — no global broadcast needed.
-
-// Create a dummy web server so Render.com can bind a port for its "Web Service" Free Tier constraints
-const express = require('express');
-const app = express();
-const port = process.env.PORT || 3000;
-
-app.get('/', (req, res) => {
-  res.send('Telegram Market Bot is running! 📈');
-});
-
-app.get('/ping', (req, res) => {
-  res.status(200).send('OK');
-});
-
-app.listen(port, () => {
-  console.log(`Dummy Express web server listening on port ${port}`);
-});
 
 bot.setMyCommands([
   { command: 'markets', description: 'Get current prices and charts' },
