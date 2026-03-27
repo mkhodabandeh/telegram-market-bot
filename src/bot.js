@@ -124,6 +124,15 @@ function saveSettings() {
 
 const defaultTickers = ['CL=F', 'BZ=F', '^GSPC', '^N225', '^NSEI', '^KS11'];
 
+function parseCommandArgs(argString) {
+  if (!argString) return [];
+
+  return argString
+    .split(/[\s,]+/)
+    .map(token => token.trim())
+    .filter(Boolean);
+}
+
 async function sendOilUpdate(chatId) {
   try {
     bot.sendChatAction(chatId, 'typing');
@@ -178,23 +187,23 @@ async function sendOilUpdate(chatId) {
 }
 
 // Commands
-bot.onText(/\/(start|help)/, (msg) => {
+bot.onText(/^\/(start|help)(?:@[\w_]+)?$/, (msg) => {
   const chatId = msg.chat.id;
   const welcomeMsg = `Welcome to the Market Price Bot! 📈\n\nCommands:\n/markets - Get current prices and charts\n/subscribe - Get an automatic update every hour\n/unsubscribe - Stop automatic hourly updates\n/set [days] [interval] - Customize the chart (e.g. \`/set 3 30m\` or \`/set 30 1d\`)\n/tickers [T1] [T2] - Set your preferred tickers (e.g. \`/tickers BZ=F CL=F GC=F\`)\n/version - Show the current bot version`;
   bot.sendMessage(chatId, welcomeMsg, { parse_mode: 'Markdown' });
 });
 
-bot.onText(/\/version/, (msg) => {
+bot.onText(/^\/version(?:@[\w_]+)?$/, (msg) => {
   const chatId = msg.chat.id;
   bot.sendMessage(chatId, `🤖 *Market Bot Version:* ${packageJson.version}`, { parse_mode: 'Markdown' });
 });
 
-bot.onText(/\/markets/, (msg) => {
+bot.onText(/^\/markets(?:@[\w_]+)?$/, (msg) => {
   const chatId = msg.chat.id;
   sendOilUpdate(chatId);
 });
 
-bot.onText(/\/subscribe(?:\s+(.+))?/, (msg, match) => {
+bot.onText(/^\/subscribe(?:@[\w_]+)?(?:\s+(.+))?$/, (msg, match) => {
   const chatId = msg.chat.id;
   const intervalArg = (match[1] || '1h').trim();
 
@@ -215,7 +224,7 @@ bot.onText(/\/subscribe(?:\s+(.+))?/, (msg, match) => {
   bot.sendMessage(chatId, `✅ Subscribed! You will receive market updates every *${intervalArg}*.`, { parse_mode: 'Markdown' });
 });
 
-bot.onText(/\/unsubscribe/, (msg) => {
+bot.onText(/^\/unsubscribe(?:@[\w_]+)?$/, (msg) => {
   const chatId = msg.chat.id;
   if (subscriptions.has(chatId)) {
     subscriptions.get(chatId).cronJob.stop();
@@ -225,9 +234,9 @@ bot.onText(/\/unsubscribe/, (msg) => {
   bot.sendMessage(chatId, "❌ You have been unsubscribed from market updates.");
 });
 
-bot.onText(/\/set ?(.*)?/, (msg, match) => {
+bot.onText(/^\/set(?:@[\w_]+)?(?:\s+(.+))?$/, (msg, match) => {
   const chatId = msg.chat.id;
-  const args = match[1] ? match[1].split(' ') : [];
+  const args = parseCommandArgs(match[1]);
   
   if (args.length !== 2) {
     bot.sendMessage(chatId, "⚠️ Usage: `/set [days] [interval]`\nValid intervals: `1m, 2m, 5m, 15m, 30m, 60m, 90m, 1h, 1d, 5d, 1wk, 1mo, 3mo`\nExample: `/set 3 30m` defaults to 3 days at 30 min intervals.", { parse_mode: 'Markdown' });
@@ -255,9 +264,9 @@ bot.onText(/\/set ?(.*)?/, (msg, match) => {
   bot.sendMessage(chatId, `✅ Settings updated!\nChart Range: **${days} days**\nData Interval: **${interval}**\nSend /markets to test it out.`, { parse_mode: 'Markdown' });
 });
 
-bot.onText(/\/tickers? ?(.*)?/, (msg, match) => {
+bot.onText(/^\/tickers?(?:@[\w_]+)?(?:\s+(.+))?$/, (msg, match) => {
   const chatId = msg.chat.id;
-  const args = match[1] ? match[1].split(' ').filter(t => t.trim() !== '') : [];
+  const args = parseCommandArgs(match[1]);
   
   if (args.length === 0) {
     bot.sendMessage(chatId, "⚠️ Usage: `/tickers [TICKER1] [TICKER2] ...`\nExample: `/tickers BZ=F CL=F GC=F`", { parse_mode: 'Markdown' });
