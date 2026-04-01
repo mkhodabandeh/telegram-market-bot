@@ -1,0 +1,6 @@
+https://www.google.com/finance/beta/quote/.INX:INDEXSP
+https://www.google.com/finance/beta/quote/BZW00:NYMEX
+https://www.google.com/finance/beta/quote/CLW00:NYMEX
+https://www.google.com/finance/beta/quote/KOSPI:KRX
+https://www.google.com/finance/beta/quote/000300:SHA
+https://www.google.com/finance/beta/quote/NIFTY_50:INDEXNSE

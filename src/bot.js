@@ -1,299 +1,177 @@
 require('dotenv').config();
 const TelegramBot = require('node-telegram-bot-api');
 const cron = require('node-cron');
-const express = require('express');
 const fs = require('fs');
-const { getOilData } = require('./oilData');
-const { generateChartUrl } = require('./chart');
-const { stitchChartsInGrid } = require('./subplots');
-const packageJson = require('../package.json');
+const { getTickerScreenshot, getTickerValue } = require('./chart');
 
+// --- 1. CONFIGURATION & STATE ---
 const token = process.env.TELEGRAM_BOT_TOKEN;
-if (!token) {
-  console.error("TELEGRAM_BOT_TOKEN is not set in .env");
-  process.exit(1);
-}
+const IS_LOCAL = process.env.LOCAL_MODE === 'true';
 
-// Start the web server immediately so Render health checks and external pings
-// succeed even while the Telegram bot finishes initializing on cold starts.
-const app = express();
-const port = process.env.PORT || 3000;
+// Priority: Command Line Arg > .env/Hardcoded Defaults
+const cmdInterval = parseInt(process.env.DEFAULT_INTERVAL) || 10;
+const cmdThreshold = parseFloat(process.env.DEFAULT_THRESHOLD) || 1.0;
 
-app.get('/', (req, res) => {
-  res.type('text/plain').send('Telegram Market Bot is running');
-});
-
-app.get('/ping', (req, res) => {
-  res.set('Cache-Control', 'no-store');
-  res.status(204).end();
-});
-
-app.head('/ping', (req, res) => {
-  res.set('Cache-Control', 'no-store');
-  res.status(204).end();
-});
-
-app.listen(port, () => {
-  console.log(`Express web server listening on port ${port}`);
-});
-
-const bot = new TelegramBot(token, { polling: true });
-
-// Simple file-based subscription management
-const SUBSCRIPTIONS_FILE = './subscriptions.json';
 const SETTINGS_FILE = './settings.json';
-// subscriptions: Map<chatId, { interval: string, cronJob: CronJob }>
-let subscriptions = new Map();
-let userSettings = {};
+const PRICE_CACHE_FILE = './price_cache.json';
 
-/**
- * Parse an interval string like "4h", "30m", "2d" into a cron expression.
- * Supported units: m (minutes), h (hours), d (days).
- * Returns null if the interval is invalid or too short (< 1 min).
- */
-function intervalToCron(intervalStr) {
-  const match = intervalStr.match(/^(\d+)([mhd])$/);
-  if (!match) return null;
-  const value = parseInt(match[1], 10);
-  const unit = match[2];
-  if (value <= 0) return null;
-
-  if (unit === 'm') {
-    if (value < 1 || value > 59) return null;
-    return `*/${value} * * * *`;
-  } else if (unit === 'h') {
-    if (value < 1 || value > 23) return null;
-    return `0 */${value} * * *`;
-  } else if (unit === 'd') {
-    if (value < 1 || value > 30) return null;
-    return `0 0 */${value} * *`;
+// Initialize state
+let userSettings = {
+  global: {
+    interval: cmdInterval,
+    threshold: cmdThreshold,
+    tickers: ['.INX:INDEXSP', 'BZW00:NYMEX', 'CLW00:NYMEX', 'KOSPI:KRX', '000300:SHA', 'NIFTY_50:INDEXNSE']
   }
-  return null;
-}
+};
 
-if (fs.existsSync(SUBSCRIPTIONS_FILE)) {
-  try {
-    const data = JSON.parse(fs.readFileSync(SUBSCRIPTIONS_FILE, 'utf8'));
-    // data may be an array (legacy) or an object { chatId: interval }
-    if (Array.isArray(data)) {
-      // legacy: set with no interval → default 1h
-      data.forEach(chatId => scheduleSubscription(chatId, '1h'));
-    } else {
-      Object.entries(data).forEach(([chatId, interval]) => scheduleSubscription(Number(chatId), interval));
-    }
-  } catch (err) {
-    console.error("Error reading subscriptions file:", err);
-  }
-}
+let lastPublishedPrices = {};
+let activeTrackerJob = null;
 
+// Load persisted data (overwrites defaults if files exist)
 if (fs.existsSync(SETTINGS_FILE)) {
   try {
-    const data = fs.readFileSync(SETTINGS_FILE, 'utf8');
-    userSettings = JSON.parse(data);
-  } catch (err) {
-    console.error("Error reading settings file:", err);
+    const savedSettings = JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8'));
+    // If running in LOCAL mode, we prioritize the CMD args over the saved JSON
+    userSettings = IS_LOCAL ? { ...savedSettings, global: userSettings.global } : savedSettings;
+  } catch (e) {
+    console.error("Error parsing settings.json, using defaults.");
   }
 }
 
-function saveSubscriptions() {
-  const data = {};
-  for (const [chatId, { interval }] of subscriptions) {
-    data[chatId] = interval;
-  }
-  fs.writeFileSync(SUBSCRIPTIONS_FILE, JSON.stringify(data));
-}
-
-function scheduleSubscription(chatId, interval) {
-  // Cancel any existing job for this chat
-  if (subscriptions.has(chatId)) {
-    subscriptions.get(chatId).cronJob.stop();
-  }
-  const cronExpr = intervalToCron(interval);
-  if (!cronExpr) return false;
-  const job = cron.schedule(cronExpr, async () => {
-    console.log(`Sending update to ${chatId} (interval: ${interval})`);
-    await sendOilUpdate(chatId);
-  });
-  subscriptions.set(chatId, { interval, cronJob: job });
-  return true;
-}
-
-function saveSettings() {
-  fs.writeFileSync(SETTINGS_FILE, JSON.stringify(userSettings));
-}
-
-const defaultTickers = ['CL=F', 'BZ=F', '^GSPC', '^N225', '^NSEI', '^KS11'];
-
-function parseCommandArgs(argString) {
-  if (!argString) return [];
-
-  return argString
-    .split(/[\s,]+/)
-    .map(token => token.trim())
-    .filter(Boolean);
-}
-
-async function sendOilUpdate(chatId) {
+if (fs.existsSync(PRICE_CACHE_FILE)) {
   try {
-    bot.sendChatAction(chatId, 'typing');
-    
-    // Fetch settings for user
-    const s = userSettings[chatId] || { days: 5, interval: '1d', tickers: defaultTickers };
-    if (!s.tickers || s.tickers.length === 0) s.tickers = defaultTickers; // fallback
-    
-    let summaryMessage = `📈 *Current Prices:*\n_Range: ${s.days} days, Interval: ${s.interval}_\n\n`;
-    let chartUrls = [];
-
-    for (const ticker of s.tickers) {
-      try {
-        const { name, currentPrice, changePercent, historicalData } = await getOilData(ticker, s.days, s.interval);
-        const displayName = `${name} (${ticker})`;
-        const chartUrl = generateChartUrl(historicalData, s.days, s.interval, displayName);
-        
-        let changeStr = '';
-        let emoji = '🔹';
-        if (changePercent !== null && changePercent !== undefined) {
-          const sign = changePercent > 0 ? '+' : '';
-          emoji = changePercent >= 0 ? '🟢 📈' : '🔴 📉';
-          changeStr = ` (${sign}${changePercent.toFixed(2)}%)`;
-        }
-        
-        summaryMessage += `${emoji} *${displayName}*: $${currentPrice.toFixed(2)}${changeStr}\n`;
-        chartUrls.push(chartUrl);
-      } catch (err) {
-        summaryMessage += `🔹 *${ticker}*: Error fetching data\n`;
-        console.error(`Error for ${ticker}:`, err);
-      }
-    }
-    
-    await bot.sendMessage(chatId, summaryMessage, { parse_mode: 'Markdown' });
-    
-    if (chartUrls.length > 0) {
-      bot.sendChatAction(chatId, 'upload_photo');
-      try {
-        const stitchedBuffer = await stitchChartsInGrid(chartUrls);
-        if (stitchedBuffer) {
-          await bot.sendPhoto(chatId, stitchedBuffer);
-        }
-      } catch (e) {
-        console.error("Error generating subplots:", e);
-        bot.sendMessage(chatId, "Failed to render subplots grid.");
-      }
-    }
-  } catch (error) {
-    console.error("Error sending market update:", error);
-    bot.sendMessage(chatId, "Sorry, I couldn't fetch the latest data right now.");
+    lastPublishedPrices = JSON.parse(fs.readFileSync(PRICE_CACHE_FILE, 'utf8'));
+  } catch (e) {
+    console.error("Error parsing price_cache.json.");
   }
 }
 
-// Commands
-bot.onText(/^\/(start|help)(?:@[\w_]+)?$/, (msg) => {
-  const chatId = msg.chat.id;
-  const welcomeMsg = `Welcome to the Market Price Bot! 📈\n\nCommands:\n/markets - Get current prices and charts\n/subscribe - Get an automatic update every hour\n/unsubscribe - Stop automatic hourly updates\n/set [days] [interval] - Customize the chart (e.g. \`/set 3 30m\` or \`/set 30 1d\`)\n/tickers [T1] [T2] - Set your preferred tickers (e.g. \`/tickers BZ=F CL=F GC=F\`)\n/version - Show the current bot version`;
-  bot.sendMessage(chatId, welcomeMsg, { parse_mode: 'Markdown' });
-});
+const bot = IS_LOCAL ? null : new TelegramBot(token, { polling: true });
 
-bot.onText(/^\/version(?:@[\w_]+)?$/, (msg) => {
-  const chatId = msg.chat.id;
-  bot.sendMessage(chatId, `🤖 *Market Bot Version:* ${packageJson.version}`, { parse_mode: 'Markdown' });
-});
+// --- 2. CORE LOGIC ---
 
-bot.onText(/^\/markets(?:@[\w_]+)?$/, (msg) => {
-  const chatId = msg.chat.id;
-  sendOilUpdate(chatId);
-});
+function saveState() {
+  fs.writeFileSync(SETTINGS_FILE, JSON.stringify(userSettings, null, 2));
+  fs.writeFileSync(PRICE_CACHE_FILE, JSON.stringify(lastPublishedPrices, null, 2));
+}
 
-bot.onText(/^\/subscribe(?:@[\w_]+)?(?:\s+(.+))?$/, (msg, match) => {
-  const chatId = msg.chat.id;
-  const intervalArg = (match[1] || '1h').trim();
+/**
+ * Sends to Telegram or Logs to Console
+ */
+async function dispatchUpdate(ticker, oldPrice, newPrice, percentChange) {
+  const direction = newPrice > oldPrice ? "increased" : "decreased";
+  const absPercent = Math.abs(percentChange).toFixed(4); // Higher precision for small thresholds
+  const message = `🔔 ${ticker} has ${direction} by ${absPercent}%\n💰 Previous: $${oldPrice} | Current: $${newPrice}`;
 
-  if (!intervalToCron(intervalArg)) {
-    bot.sendMessage(chatId,
-      "⚠️ Invalid interval. Use formats like `30m`, `4h`, `2d`.\nExample: `/subscribe 4h`",
-      { parse_mode: 'Markdown' }
-    );
-    return;
+  if (IS_LOCAL) {
+    console.log(`\n[LOCAL OUTPUT]`);
+    console.log(`TEXT: ${message}`);
+    console.log(`IMAGE: Capturing ${ticker} chart...`);
+    try {
+      await getTickerScreenshot(ticker);
+      console.log(`[LOCAL] Chart for ${ticker} captured and saved to disk.`);
+    } catch (e) {
+      console.error(`[LOCAL] Failed to capture chart: ${e.message}`);
+    }
+  } else {
+    // Send to all registered users
+    const subscribers = Object.keys(userSettings).filter(id => id !== 'global');
+    
+    for (const chatId of subscribers) {
+      try {
+        const photo = await getTickerScreenshot(ticker);
+        await bot.sendPhoto(chatId, photo, { 
+            caption: message,
+            parse_mode: 'Markdown' 
+        });
+      } catch (e) {
+        console.error(`Failed to send to ${chatId}:`, e.message);
+      }
+    }
   }
+}
 
-  const ok = scheduleSubscription(chatId, intervalArg);
-  if (!ok) {
-    bot.sendMessage(chatId, "⚠️ Failed to schedule subscription.");
-    return;
+/**
+ * The Tracking Engine
+ */
+async function runTracker() {
+  const { threshold, tickers } = userSettings.global;
+  console.log(`\n--- Check started at ${new Date().toLocaleTimeString()} (Threshold: ${threshold}%) ---`);
+
+  for (const ticker of tickers) {
+    try {
+      console.log(`Processing: ${ticker}...`);
+      const rawValue = await getTickerValue(ticker);
+      if (!rawValue) {
+        console.log(`   ⚠️ No value returned for ${ticker}`);
+        continue;
+      }
+
+      const currentPrice = parseFloat(rawValue.replace(/,/g, ''));
+      const previousPrice = lastPublishedPrices[ticker] || 0;
+
+      // First run for a ticker: just save the price
+      if (previousPrice === 0) {
+        console.log(`   ✨ Initializing ${ticker} at $${currentPrice}`);
+        lastPublishedPrices[ticker] = currentPrice;
+        saveState();
+        continue;
+      }
+
+      const diffPercent = ((currentPrice - previousPrice) / previousPrice) * 100;
+      
+      console.log(`   🔍 ${ticker}: $${currentPrice} (Change: ${diffPercent.toFixed(4)}%)`);
+
+      if (Math.abs(diffPercent) >= threshold) {
+        await dispatchUpdate(ticker, previousPrice, currentPrice, diffPercent);
+        lastPublishedPrices[ticker] = currentPrice;
+        saveState();
+      }
+    } catch (err) {
+      console.error(`   ❌ Tracker error for ${ticker}:`, err.message);
+    }
   }
-  saveSubscriptions();
-  bot.sendMessage(chatId, `✅ Subscribed! You will receive market updates every *${intervalArg}*.`, { parse_mode: 'Markdown' });
-});
+}
 
-bot.onText(/^\/unsubscribe(?:@[\w_]+)?$/, (msg) => {
-  const chatId = msg.chat.id;
-  if (subscriptions.has(chatId)) {
-    subscriptions.get(chatId).cronJob.stop();
-    subscriptions.delete(chatId);
-    saveSubscriptions();
-  }
-  bot.sendMessage(chatId, "❌ You have been unsubscribed from market updates.");
-});
+/**
+ * Start/Restart the Scheduler
+ */
+function startTracker() {
+  if (activeTrackerJob) activeTrackerJob.stop();
+  
+  const minutes = userSettings.global.interval;
+  // Cron syntax for "every X minutes"
+  activeTrackerJob = cron.schedule(`*/${minutes} * * * *`, runTracker);
+  console.log(`Tracker active: Checking every ${minutes} minute(s) at ${userSettings.global.threshold}% threshold.`);
+}
 
-bot.onText(/^\/set(?:@[\w_]+)?(?:\s+(.+))?$/, (msg, match) => {
-  const chatId = msg.chat.id;
-  const args = parseCommandArgs(match[1]);
-  
-  if (args.length !== 2) {
-    bot.sendMessage(chatId, "⚠️ Usage: `/set [days] [interval]`\nValid intervals: `1m, 2m, 5m, 15m, 30m, 60m, 90m, 1h, 1d, 5d, 1wk, 1mo, 3mo`\nExample: `/set 3 30m` defaults to 3 days at 30 min intervals.", { parse_mode: 'Markdown' });
-    return;
-  }
-  
-  const days = parseInt(args[0], 10);
-  const interval = args[1];
-  
-  if (isNaN(days) || days <= 0 || days > 365) {
-    bot.sendMessage(chatId, "⚠️ Please provide a valid number of days (1-365).");
-    return;
-  }
-  
-  if (!interval.match(/^\d+[mhd]$/) && !['1wk', '1mo', '3mo'].includes(interval)) {
-    bot.sendMessage(chatId, "⚠️ Invalid interval. Use formats like `8h`, `2d`, `30m` or native `1wk`, `1mo`.", { parse_mode: 'Markdown' });
-    return;
-  }
+// --- 3. TELEGRAM COMMANDS ---
+if (!IS_LOCAL && bot) {
+  bot.onText(/\/config (\d+) (\d+\.?\d*)/, (msg, match) => {
+    const minutes = parseInt(match[1]);
+    const threshold = parseFloat(match[2]);
 
-  if (!userSettings[chatId]) userSettings[chatId] = { tickers: defaultTickers };
-  userSettings[chatId].days = days;
-  userSettings[chatId].interval = interval;
-  saveSettings();
-  
-  bot.sendMessage(chatId, `✅ Settings updated!\nChart Range: **${days} days**\nData Interval: **${interval}**\nSend /markets to test it out.`, { parse_mode: 'Markdown' });
-});
+    userSettings.global.interval = minutes;
+    userSettings.global.threshold = threshold;
+    saveState();
+    
+    startTracker();
+    bot.sendMessage(msg.chat.id, `✅ *Configuration Updated*\nInterval: ${minutes}m\nThreshold: ${threshold}%`, { parse_mode: 'Markdown' });
+  });
 
-bot.onText(/^\/tickers?(?:@[\w_]+)?(?:\s+(.+))?$/, (msg, match) => {
-  const chatId = msg.chat.id;
-  const args = parseCommandArgs(match[1]);
-  
-  if (args.length === 0) {
-    bot.sendMessage(chatId, "⚠️ Usage: `/tickers [TICKER1] [TICKER2] ...`\nExample: `/tickers BZ=F CL=F GC=F`", { parse_mode: 'Markdown' });
-    return;
-  }
-  
-  if (!userSettings[chatId]) userSettings[chatId] = { days: 5, interval: '1d' };
-  userSettings[chatId].tickers = args;
-  saveSettings();
-  
-  bot.sendMessage(chatId, `✅ Tickers updated to: **${args.join(', ')}**\nSend /markets to test.`, { parse_mode: 'Markdown' });
-});
+  bot.onText(/\/start/, (msg) => {
+    if (!userSettings[msg.chat.id]) {
+      userSettings[msg.chat.id] = { active: true };
+      saveState();
+    }
+    bot.sendMessage(msg.chat.id, "📈 *Market Watcher Bot Started*\n\nI will alert you when markets move.\nUse `/config [min] [%]` to adjust settings.", { parse_mode: 'Markdown' });
+  });
+}
 
-// Per-chat cron jobs are created in scheduleSubscription() — no global broadcast needed.
+// --- 4. EXECUTION ---
+startTracker();
 
-bot.setMyCommands([
-  { command: 'markets', description: 'Get current prices and charts' },
-  { command: 'subscribe', description: 'Subscribe to automatic updates' },
-  { command: 'unsubscribe', description: 'Unsubscribe from updates' },
-  { command: 'set', description: 'Customize chart range and interval' },
-  { command: 'tickers', description: 'Set preferred market tickers' },
-  { command: 'version', description: 'Show bot version' },
-  { command: 'help', description: 'Show help message' }
-]).then(() => {
-  console.log("Bot commands registered.");
-}).catch((err) => {
-  console.error("Error registering bot commands:", err);
-});
-
-console.log("Bot is running...");
+// In local mode, we usually want an immediate first run to see results
+if (IS_LOCAL) {
+  runTracker();
+}
