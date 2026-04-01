@@ -2,6 +2,7 @@ require('dotenv').config({
   path: process.env.DOTENV_CONFIG_PATH || undefined,
   override: false,
 });
+const express = require('express');
 const TelegramBot = require('node-telegram-bot-api');
 const cron = require('node-cron');
 const fs = require('fs');
@@ -10,6 +11,7 @@ const { getTickerScreenshot, getTickerValue } = require('./chart');
 // --- 1. CONFIGURATION & STATE ---
 const token = process.env.TELEGRAM_BOT_TOKEN;
 const IS_LOCAL = process.env.LOCAL_MODE === 'true';
+const PORT = parseInt(process.env.PORT, 10) || 3000;
 
 // Priority: Command Line Arg > .env/Hardcoded Defaults
 const cmdInterval = parseInt(process.env.DEFAULT_INTERVAL) || 10;
@@ -50,6 +52,15 @@ if (fs.existsSync(PRICE_CACHE_FILE)) {
 }
 
 const bot = IS_LOCAL ? null : new TelegramBot(token, { polling: true });
+const app = express();
+
+app.get('/ping', (_req, res) => {
+  res.status(204).end();
+});
+
+app.listen(PORT, () => {
+  console.log(`HTTP server listening on port ${PORT}`);
+});
 
 // --- 2. CORE LOGIC ---
 
