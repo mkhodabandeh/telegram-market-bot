@@ -83,10 +83,18 @@ async function dispatchUpdate(ticker, oldPrice, newPrice, percentChange) {
     for (const chatId of subscribers) {
       try {
         const photo = await getTickerScreenshot(ticker);
-        await bot.sendPhoto(chatId, photo, { 
+        await bot.sendPhoto(
+          chatId,
+          photo,
+          {
             caption: message,
-            parse_mode: 'Markdown' 
-        });
+            parse_mode: 'Markdown'
+          },
+          {
+            filename: `chart_${ticker.replace(/[^a-zA-Z0-9._-]/g, '_')}.png`,
+            contentType: 'image/png'
+          }
+        );
       } catch (e) {
         console.error(`Failed to send to ${chatId}:`, e.message);
       }

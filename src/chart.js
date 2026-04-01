@@ -75,7 +75,7 @@ async function getTickerScreenshot(ticker) {
       clip: { x: 100, y: 150, width: 730, height: 500 }
     });
 
-    return screenshot;
+    return Buffer.isBuffer(screenshot) ? screenshot : Buffer.from(screenshot);
   } catch (error) {
     throw error;
   } finally {
