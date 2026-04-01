@@ -12,6 +12,15 @@ const { getTickerScreenshot, getTickerValue } = require('./chart');
 const token = process.env.TELEGRAM_BOT_TOKEN;
 const IS_LOCAL = process.env.LOCAL_MODE === 'true';
 const PORT = parseInt(process.env.PORT, 10) || 3000;
+const RENDER_EXTERNAL_URL = process.env.RENDER_EXTERNAL_URL;
+const WEBHOOK_URL = process.env.TELEGRAM_WEBHOOK_URL || RENDER_EXTERNAL_URL || '';
+const WEBHOOK_PATH = process.env.TELEGRAM_WEBHOOK_PATH || `/telegram/webhook/${token}`;
+const USE_WEBHOOK = !IS_LOCAL && Boolean(WEBHOOK_URL);
+
+if (!token) {
+  console.error('TELEGRAM_BOT_TOKEN is not set.');
+  process.exit(1);
+}
 
 // Priority: Command Line Arg > .env/Hardcoded Defaults
 const cmdInterval = parseInt(process.env.DEFAULT_INTERVAL) || 10;
@@ -51,15 +60,50 @@ if (fs.existsSync(PRICE_CACHE_FILE)) {
   }
 }
 
-const bot = IS_LOCAL ? null : new TelegramBot(token, { polling: true });
+const bot = IS_LOCAL
+  ? null
+  : new TelegramBot(token, USE_WEBHOOK ? {} : { polling: true });
 const app = express();
+
+app.use(express.json());
 
 app.get('/ping', (_req, res) => {
   res.status(204).end();
 });
 
-app.listen(PORT, () => {
+app.get('/', (_req, res) => {
+  res.type('text/plain').send('Telegram Market Bot is running');
+});
+
+app.post(WEBHOOK_PATH, (req, res) => {
+  if (!bot || !USE_WEBHOOK) {
+    return res.status(404).end();
+  }
+
+  bot.processUpdate(req.body);
+  return res.status(200).end();
+});
+
+app.listen(PORT, async () => {
   console.log(`HTTP server listening on port ${PORT}`);
+
+  if (!bot || !USE_WEBHOOK) {
+    if (!IS_LOCAL) {
+      console.log('Telegram transport: polling');
+    }
+    return;
+  }
+
+  const normalizedBaseUrl = WEBHOOK_URL.replace(/\/+$/, '');
+  const webhookUrl = `${normalizedBaseUrl}${WEBHOOK_PATH}`;
+
+  try {
+    await bot.setWebHook(webhookUrl);
+    console.log(`Telegram transport: webhook (${webhookUrl})`);
+  } catch (error) {
+    console.error(`Failed to set webhook: ${error.message}`);
+    process.exit(1);
+  }
 });
 
 // --- 2. CORE LOGIC ---
