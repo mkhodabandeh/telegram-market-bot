@@ -5,8 +5,10 @@
   "main": "index.js",
   "scripts": {
     "start": "node --max-http-header-size=65536 src/bot.js",
-    "dev": "node -r dotenv/config --max-http-header-size=65536 src/bot.js dotenv_config_path=.env.test",
+    "dev": "DOTENV_CONFIG_PATH=.env.test node --max-http-header-size=65536 src/bot.js",
+    "postinstall": "npx puppeteer browsers install chrome",
     "release": "node scripts/release.js",
+    "setup:browser": "npx puppeteer browsers install chrome",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
