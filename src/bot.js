@@ -6,7 +6,7 @@ const express = require('express');
 const TelegramBot = require('node-telegram-bot-api');
 const cron = require('node-cron');
 const fs = require('fs');
-const { getTickerScreenshot, getTickerValue } = require('./chart');
+const { getTickerScreenshot, getTickerValue, closeBrowser } = require('./chart');
 
 // --- 1. CONFIGURATION & STATE ---
 const token = process.env.TELEGRAM_BOT_TOKEN;
@@ -40,6 +40,7 @@ let userSettings = {
 
 let lastPublishedPrices = {};
 let activeTrackerJob = null;
+let trackerRunInProgress = false;
 
 // Load persisted data (overwrites defaults if files exist)
 if (fs.existsSync(SETTINGS_FILE)) {
@@ -113,6 +114,14 @@ function saveState() {
   fs.writeFileSync(PRICE_CACHE_FILE, JSON.stringify(lastPublishedPrices, null, 2));
 }
 
+function logMemoryUsage(context) {
+  const toMb = bytes => `${(bytes / 1024 / 1024).toFixed(1)}MB`;
+  const usage = process.memoryUsage();
+  console.log(
+    `[memory] ${context} rss=${toMb(usage.rss)} heapUsed=${toMb(usage.heapUsed)} heapTotal=${toMb(usage.heapTotal)} external=${toMb(usage.external)}`
+  );
+}
+
 /**
  * Sends to Telegram or Logs to Console
  */
@@ -134,10 +143,17 @@ async function dispatchUpdate(ticker, oldPrice, newPrice, percentChange) {
   } else {
     // Send to all registered users
     const subscribers = Object.keys(userSettings).filter(id => id !== 'global');
+    let photo = null;
+
+    try {
+      photo = await getTickerScreenshot(ticker);
+    } catch (e) {
+      console.error(`Failed to capture chart for ${ticker}:`, e.message);
+      return;
+    }
     
     for (const chatId of subscribers) {
       try {
-        const photo = await getTickerScreenshot(ticker);
         await bot.sendPhoto(
           chatId,
           photo,
@@ -161,41 +177,53 @@ async function dispatchUpdate(ticker, oldPrice, newPrice, percentChange) {
  * The Tracking Engine
  */
 async function runTracker() {
+  if (trackerRunInProgress) {
+    console.warn('Skipping tracker run because the previous cycle is still in progress.');
+    logMemoryUsage('skip-overlap');
+    return;
+  }
+
+  trackerRunInProgress = true;
   const { threshold, tickers } = userSettings.global;
   console.log(`\n--- Check started at ${new Date().toLocaleTimeString()} (Threshold: ${threshold}%) ---`);
+  logMemoryUsage('before-run');
 
-  for (const ticker of tickers) {
-    try {
-      console.log(`Processing: ${ticker}...`);
-      const rawValue = await getTickerValue(ticker);
-      if (!rawValue) {
-        console.log(`   ⚠️ No value returned for ${ticker}`);
-        continue;
+  try {
+    for (const ticker of tickers) {
+      try {
+        console.log(`Processing: ${ticker}...`);
+        const rawValue = await getTickerValue(ticker);
+        if (!rawValue) {
+          console.log(`   ⚠️ No value returned for ${ticker}`);
+          continue;
+        }
+
+        const currentPrice = parseFloat(rawValue.replace(/,/g, ''));
+        const previousPrice = lastPublishedPrices[ticker] || 0;
+
+        if (previousPrice === 0) {
+          console.log(`   ✨ Initializing ${ticker} at $${currentPrice}`);
+          lastPublishedPrices[ticker] = currentPrice;
+          saveState();
+          continue;
+        }
+
+        const diffPercent = ((currentPrice - previousPrice) / previousPrice) * 100;
+        
+        console.log(`   🔍 ${ticker}: $${currentPrice} (Change: ${diffPercent.toFixed(4)}%)`);
+
+        if (Math.abs(diffPercent) >= threshold) {
+          await dispatchUpdate(ticker, previousPrice, currentPrice, diffPercent);
+          lastPublishedPrices[ticker] = currentPrice;
+          saveState();
+        }
+      } catch (err) {
+        console.error(`   ❌ Tracker error for ${ticker}:`, err.message);
       }
-
-      const currentPrice = parseFloat(rawValue.replace(/,/g, ''));
-      const previousPrice = lastPublishedPrices[ticker] || 0;
-
-      // First run for a ticker: just save the price
-      if (previousPrice === 0) {
-        console.log(`   ✨ Initializing ${ticker} at $${currentPrice}`);
-        lastPublishedPrices[ticker] = currentPrice;
-        saveState();
-        continue;
-      }
-
-      const diffPercent = ((currentPrice - previousPrice) / previousPrice) * 100;
-      
-      console.log(`   🔍 ${ticker}: $${currentPrice} (Change: ${diffPercent.toFixed(4)}%)`);
-
-      if (Math.abs(diffPercent) >= threshold) {
-        await dispatchUpdate(ticker, previousPrice, currentPrice, diffPercent);
-        lastPublishedPrices[ticker] = currentPrice;
-        saveState();
-      }
-    } catch (err) {
-      console.error(`   ❌ Tracker error for ${ticker}:`, err.message);
     }
+  } finally {
+    trackerRunInProgress = false;
+    logMemoryUsage('after-run');
   }
 }
 
@@ -232,6 +260,19 @@ if (!IS_LOCAL && bot) {
     }
     bot.sendMessage(msg.chat.id, "📈 *Market Watcher Bot Started*\n\nI will alert you when markets move.\nUse `/config [min] [%]` to adjust settings.", { parse_mode: 'Markdown' });
   });
+
+  bot.onText(/\/stop/, (msg) => {
+    if (userSettings[msg.chat.id]) {
+      delete userSettings[msg.chat.id];
+      saveState();
+    }
+
+    bot.sendMessage(
+      msg.chat.id,
+      "🛑 *Market Watcher Bot Stopped*\n\nYou will no longer receive alerts. Use `/start` to subscribe again.",
+      { parse_mode: 'Markdown' }
+    );
+  });
 }
 
 // --- 4. EXECUTION ---
@@ -241,3 +282,20 @@ startTracker();
 if (IS_LOCAL) {
   runTracker();
 }
+
+async function shutdown(signal) {
+  console.log(`Received ${signal}, shutting down.`);
+  if (activeTrackerJob) {
+    activeTrackerJob.stop();
+  }
+  await closeBrowser().catch(() => {});
+  process.exit(0);
+}
+
+process.on('SIGINT', () => {
+  shutdown('SIGINT');
+});
+
+process.on('SIGTERM', () => {
+  shutdown('SIGTERM');
+});
